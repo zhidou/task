@@ -121,6 +121,7 @@ def pca_pool(temp, m = 1):
     u = tf.reduce_sum(tf.multiply(u, mark), axis=2)
     u = tf.reshape(u, [-1, 1, K])
     
+    # divide sqrt(k) to remove the effect of size of window
     temp = tf.matmul(u, temp)/np.sqrt(K)
     if m == 1: temp = tf.reshape(temp, [-1, H, W, C])
     else: 
