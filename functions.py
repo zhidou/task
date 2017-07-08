@@ -167,3 +167,4 @@ def pool_weight(p, f, reduce_fun, pool_fun):
         w = tf.transpose(w, [0, 2, 3, 1])
     
     return tf.multiply(p, w)
+
