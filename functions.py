@@ -1,6 +1,5 @@
 import tensorflow as tf
 import numpy as np
-
 # preprocessing functions
 
 # for global contrast normalization
@@ -167,4 +166,45 @@ def pool_weight(p, f, reduce_fun, pool_fun):
         w = tf.transpose(w, [0, 2, 3, 1])
     
     return tf.multiply(p, w)
+
+
+# there is no overlap in our pooling
+def max_unpooling_mark(pre_patch, pool):
+    [N, H, W, K, C] = pre_patch.get_shape().as_list()
+    pool = tf.reshape(pool, [N, H, W, 1, C])
+    mark = tf.cast(tf.equal(pre_patch, pool), dtype = tf.float32)
+    mark = tf.div(mark, tf.reduce_sum(mark, axis=3, keep_dims=True))
+    return mark
+
+# compute filter weight gradient
+# for this exp we use 5*5 as the kernel
+def filter_gradient(e, pre, cur):
+    [N, H, W, C] = cur.get_shape().as_list()
+    pre = tf.pad(pre, tf.constant([[0,0],[2,2],[2,2],[0,0]]))
+    pre = extract_patches(pre, 'VALID', H, 1)
+    pre = tf.reshape(pre, [N, 5, 5, H * H, -1, 1])
+    grad_w = tf.reduce_sum(tf.multiply(pre, tf.reshape(e, [N, 1, 1, H * H, 1, C])), axis=[3, 0]) / N
+    grad_b = tf.reduce_sum(e, axis=[0,1,2]) / N
+    return grad_w, grad_b
+
+# transmit error from conv layer to pooling layer
+def error_conv2pooling(e, w):
+    return tf.nn.conv2d(e, tf.reverse(tf.transpose(w, [0, 1, 3, 2]), axis=[0, 1]), 
+        strides=[1, 1, 1, 1], padding = 'SAME')
+
+
+# global variable
+unpooling_method = {'max': max_unpooling_mark}
+
+# compute error from pooling to conv layer
+def error_pooling2conv(e, pre_patch, pool, method):
+    [N, H, W, K, C] = pre_patch.get_shape().as_list()
+    mark = unpooling_method[method](pre_patch, pool)
+    e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
+    e = tf.reshape(e, [N, -1, K, C])
+    e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
+        strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
+    e = tf.reshape(e, [N, H * int(np.sqrt(K)), W * int(np.sqrt(K)), C])
+    return e
+
 
