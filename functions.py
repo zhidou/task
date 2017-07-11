@@ -47,7 +47,7 @@ def extract_patches(x, padding, ksize=2, stride=2):
 # output frequency tensor in shape N, H, W, K, C
 def majority_frequency(temp):
     [N, H, W, K, C] = temp.get_shape().as_list()
-    print([N, H, W, K, C])
+
     temp = tf.to_int32(tf.round(temp))
 #     build one hot vector
     temp = tf.transpose(temp, [0,1,2,4,3])
