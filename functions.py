@@ -41,6 +41,9 @@ def extract_patches(x, padding, ksize=2, stride=2):
     temp = tf.reshape(temp, [-1, H, W, ksize*ksize, C])
     return temp
 
+# cast function use to compute the frequency
+def cast(p):
+    return tf.to_int32(tf.round(p))
 
 # compute the frequency of element in each patch
 # input extracted patches tensor in shape N, H, W, K, C
@@ -48,7 +51,7 @@ def extract_patches(x, padding, ksize=2, stride=2):
 def majority_frequency(temp):
     [N, H, W, K, C] = temp.get_shape().as_list()
 
-    temp = tf.to_int32(tf.round(temp))
+    temp = cast(temp)
 #     build one hot vector
     temp = tf.transpose(temp, [0,1,2,4,3])
     one_hot = tf.one_hot(indices=temp, depth=tf.reduce_max(temp) + 1, dtype=tf.float32)
@@ -80,23 +83,50 @@ def compute_weight(w, fun):
     return temp
 
 
-# MaxPool
+# ---------------------------------- pooling function ---------------------------------
+# the mask have shape of N, H, W, K C
 def max_pool(p):
     return tf.reduce_max(p, axis=3)
 
+def max_pool_with_mask(p):
+    pool = max_pool(p)
+    [N, H, W, K, C] = p.get_shape().as_list()
+    mask = tf.reshape(pool, [N, H, W, 1, C])
+    mask = tf.cast(tf.equal(p, mask), dtype = tf.float32)
+    mask = tf.div(mask, tf.reduce_sum(mask, axis=3, keep_dims=True))
+    return pool, mask
+
+# for majority pooling if the maximum frequency of one window is 1, then we pool the max from this window
 def majority_pool(p, f):
     btemp = tf.reduce_max(f , axis=[3], keep_dims=True)
 #     get the index of the majority element
-    temp = tf.equal(f, btemp)
-    temp = tf.to_float(temp)
+    temp = tf.to_float(tf.equal(f, btemp))
 #     use the largest frequency to represent each window
     btemp = tf.squeeze(btemp, squeeze_dims=3)
 #     compute mean of the elements that have same round value in each window
-    temp = tf.divide(tf.reduce_sum(tf.multiply(p, temp), axis=[3]), btemp)
+    temp = tf.div(tf.reduce_sum(tf.multiply(p, temp), axis=[3]), btemp)
 #     when the largest frequency is 1, then we just the max value in p as the result, else use the mean of the of elements
 #     having the same round value, as the result.
     temp = tf.where(tf.equal(btemp, 1), tf.reduce_max(p, axis=[3]), temp)
     return temp
+
+def majority_pool_with_mask(p,f):
+    btemp = tf.reduce_max(f , axis=[3], keep_dims=True)
+#     get the index of the majority element
+    pool = tf.cast(tf.equal(f, btemp), dtype=tf.float32)
+#     use the largest frequency to represent each window
+    btemp = tf.squeeze(btemp, squeeze_dims=3)
+#     compute mean of the elements that have same round value in each window
+    pool = tf.div(tf.reduce_sum(tf.multiply(p, pool), axis=[3]), btemp)
+#     when the largest frequency is 1, then we just the max value in p as the result, else use the mean of the of elements
+#     having the same round value, as the result.
+    pool = tf.where(tf.equal(btemp, 1), tf.reduce_max(p, axis=[3]), pool)
+
+    [N, H, W, K, C] = p.get_shape().as_list()
+    mask = tf.reshape(pool, [N, H, W, 1, C])
+    mask = tf.cast(tf.equal(cast(p), cast(mask)), dtype = tf.float32)
+    mask = tf.div(mask, tf.reduce_sum(mask, axis=3, keep_dims=True))
+    return pool, mask
 
 # pcaPool
 # if m == 1, then consider each window as an unique instances, and each window have their own pca encoder
@@ -128,9 +158,38 @@ def pca_pool(temp, m = 1):
         temp = tf.transpose(temp, [0, 2, 3, 1])
     return temp
 
+def pca_pool_with_mask(temp, m = 1):
+    [N, H, W, K, C] = temp.get_shape().as_list()
+    if m == 1:
+        temp = tf.transpose(temp, [0,1,2,4,3])
+        temp = tf.reshape(temp, [-1, K, 1])
+    else:
+        temp = tf.transpose(temp, [0,4,3,1,2])
+        temp = tf.reshape(temp, [-1, K, H*W])
+#     compute for svd
+    [s, u, v] = tf.svd(tf.matmul(temp, tf.transpose(temp, [0,2,1])), compute_uv=True)
+#     use mark to remove Eigenvector except for the first one, which is the main component
+    temp_mark = np.zeros([K,K])
+    temp_mark[:,0] = 1
+    mark = tf.constant(temp_mark, dtype=tf.float32)
+    
+#     after reduce_sum actually it has been transposed automatically
+    u = tf.reduce_sum(tf.multiply(u, mark), axis=2)
+    u = tf.reshape(u, [-1, 1, K])
+    
+    # divide sqrt(k) to remove the effect of size of window
+    temp = tf.matmul(u, temp)/np.sqrt(K)
+    if m == 1: temp = tf.reshape(temp, [-1, H, W, C])
+    else: 
+        temp = tf.reshape(temp, [-1, C, H, W])
+        temp = tf.transpose(temp, [0, 2, 3, 1])
+    # this is right, go home and continue
+
+
+
+
 
 # weithed pooling functions
-
 # weight before maxpool p:= patches, w:= weights
 def weight_pool(p, f, reduce_fun, pool_fun):
     temp = tf.multiply(p, compute_weight(f, reduce_fun))
@@ -168,14 +227,6 @@ def pool_weight(p, f, reduce_fun, pool_fun):
     return tf.multiply(p, w)
 
 
-# there is no overlap in our pooling
-def max_unpooling_mark(pre_patch, pool):
-    [N, H, W, K, C] = pre_patch.get_shape().as_list()
-    pool = tf.reshape(pool, [N, H, W, 1, C])
-    mark = tf.cast(tf.equal(pre_patch, pool), dtype = tf.float32)
-    mark = tf.div(mark, tf.reduce_sum(mark, axis=3, keep_dims=True))
-    return mark
-
 # compute filter weight gradient
 # for this exp we use 5*5 as the kernel
 def filter_gradient(e, pre, cur):
@@ -194,17 +245,17 @@ def error_conv2pooling(e, w):
 
 
 # global variable
-unpooling_method = {'max': max_unpooling_mark}
+# unpooling_method = {'max': max_unpooling_mark}
 
 # compute error from pooling to conv layer
-def error_pooling2conv(e, pre_patch, pool, method):
-    [N, H, W, K, C] = pre_patch.get_shape().as_list()
-    mark = unpooling_method[method](pre_patch, pool)
-    e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
-    e = tf.reshape(e, [N, -1, K, C])
-    e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
-        strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
-    e = tf.reshape(e, [N, H * int(np.sqrt(K)), W * int(np.sqrt(K)), C])
-    return e
+# def error_pooling2conv(e, pre_patch, pool, method):
+#     [N, H, W, K, C] = pre_patch.get_shape().as_list()
+#     mark = unpooling_method[method](pre_patch, pool)
+#     e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
+#     e = tf.reshape(e, [N, -1, K, C])
+#     e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
+#         strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
+#     e = tf.reshape(e, [N, H * int(np.sqrt(K)), W * int(np.sqrt(K)), C])
+#     return e
 
 
