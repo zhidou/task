@@ -176,18 +176,18 @@ def pca_pool_with_mask(temp, m = 1):
 #     after reduce_sum actually it has been transposed automatically
     u = tf.reduce_sum(tf.multiply(u, mark), axis=2)
     u = tf.reshape(u, [-1, 1, K])
-    
+    u = u / np.sqrt(K)
     # divide sqrt(k) to remove the effect of size of window
     temp = tf.matmul(u, temp)/np.sqrt(K)
-    if m == 1: temp = tf.reshape(temp, [-1, H, W, C])
+    if m == 1: 
+        temp = tf.reshape(temp, [-1, H, W, C])
+        u = tf.transpose(tf.reshape(u, [N, H, W, C, K]), [0, 1, 2, 4, 3])
     else: 
         temp = tf.reshape(temp, [-1, C, H, W])
         temp = tf.transpose(temp, [0, 2, 3, 1])
-    # this is right, go home and continue
-
-
-
-
+        u = tf.transpose(tf.reshape(u, [N, C, K, 1, 1]), [0, 3, 4, 2, 1])
+        u = tf.multiply(u, tf.ones_like(y))
+    return temp, u
 
 # weithed pooling functions
 # weight before maxpool p:= patches, w:= weights
@@ -197,6 +197,16 @@ def weight_pool(p, f, reduce_fun, pool_fun):
         temp = pool_fun(temp, majority_frequency(temp))
     else: temp = pool_fun(temp)
     return temp
+
+
+def weight_pool_with_mask(p, f, reduce_fun, pool_fun):
+    w = compute_weight(f, reduce_fun)
+    temp = tf.multiply(p, w)
+    if pool_fun is majority_pool_with_mask:
+        temp, u = pool_fun(temp, majority_frequency(temp))
+    else: temp, u = pool_fun(temp)
+    u = tf.multiply(u, w)
+    return temp, u
 
 # maxpool before weight
 def pool_weight(p, f, reduce_fun, pool_fun):
@@ -226,6 +236,35 @@ def pool_weight(p, f, reduce_fun, pool_fun):
     
     return tf.multiply(p, w)
 
+def pool_weight_with_mask():
+    #     for now both p and w are in the shape of N,H,W,K,C
+    [N, H, W, K, C] = p.get_shape().as_list()
+    w = compute_weight(f, reduce_fun)
+    if pool_fun is majority_pool_with_mask:
+        p, u = pool_fun(p, f)
+        w = tf.reduce_max(w, axis=3)
+    else:
+#     argmax in the shape of N, H, W, C
+        argmax = tf.argmax(p, axis=3)
+        p, u = pool_fun(p)
+#     move C before H
+        argmax = tf.transpose(argmax, [0, 3, 1, 2])
+        w = tf.transpose(w, [0, 4, 1, 2, 3])
+#     flatten argmax and w
+        argmax = tf.reshape(argmax, [N*H*W*C, 1])
+        w = tf.reshape(w, [N*H*W*C, K])
+#     create index helper
+        index = tf.constant(np.array([range(argmax.get_shape().as_list()[0])]), dtype=tf.int64)
+        argmax = tf.concat((tf.transpose(index), argmax), axis=1)
+#     get the corresponding weight of the max
+        w = tf.gather_nd(w, argmax)
+        w = tf.reshape(w, [N, C, H, W])
+        w = tf.transpose(w, [0, 2, 3, 1])
+    p = tf.multiply(p, w)
+    u = tf.multiply(u, w)
+    return p, u
+
+
 
 # compute filter weight gradient
 # for this exp we use 5*5 as the kernel
@@ -248,14 +287,11 @@ def error_conv2pooling(e, w):
 # unpooling_method = {'max': max_unpooling_mark}
 
 # compute error from pooling to conv layer
-# def error_pooling2conv(e, pre_patch, pool, method):
-#     [N, H, W, K, C] = pre_patch.get_shape().as_list()
-#     mark = unpooling_method[method](pre_patch, pool)
-#     e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
-#     e = tf.reshape(e, [N, -1, K, C])
-#     e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
-#         strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
-#     e = tf.reshape(e, [N, H * int(np.sqrt(K)), W * int(np.sqrt(K)), C])
-#     return e
-
-
+def error_pooling2conv(e, mask):
+    [N, H, W, K, C] = mask.get_shape().as_list()
+    e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
+    e = tf.reshape(e, [N, -1, K, C])
+    e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
+        strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
+    e = tf.reshape(e, [N, H * int(np.sqrt(K)), W * int(np.sqrt(K)), C])
+    return e
