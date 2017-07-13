@@ -241,7 +241,7 @@ def error_conv2pooling(e, w):
 # compute error from pooling to conv layer
 def error_pooling2conv(e, mask):
     [N, H, W, K, C] = mask.get_shape().as_list()
-    e = tf.multiply(mark, tf.reshape(e, [N, H, W, 1, C]))
+    e = tf.multiply(mask, tf.reshape(e, [N, H, W, 1, C]))
     e = tf.reshape(e, [N, -1, K, C])
     e = tf.extract_image_patches(images=e, ksizes=[1, H, int(np.sqrt(K)), 1], 
         strides=[1, H, int(np.sqrt(K)), 1], padding="VALID", rates=[1, 1, 1, 1])
