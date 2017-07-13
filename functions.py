@@ -98,17 +98,8 @@ def max_pool_with_mask(p):
 
 # for majority pooling if the maximum frequency of one window is 1, then we pool the max from this window
 def majority_pool(p, f):
-    btemp = tf.reduce_max(f , axis=[3], keep_dims=True)
-#     get the index of the majority element
-    temp = tf.to_float(tf.equal(f, btemp))
-#     use the largest frequency to represent each window
-    btemp = tf.squeeze(btemp, squeeze_dims=3)
-#     compute mean of the elements that have same round value in each window
-    temp = tf.div(tf.reduce_sum(tf.multiply(p, temp), axis=[3]), btemp)
-#     when the largest frequency is 1, then we just the max value in p as the result, else use the mean of the of elements
-#     having the same round value, as the result.
-    temp = tf.where(tf.equal(btemp, 1), tf.reduce_max(p, axis=[3]), temp)
-    return temp
+    pool, mask = majority_pool_with_mask(p, f)
+    return pool
 
 def majority_pool_with_mask(p,f):
     btemp = tf.reduce_max(f , axis=[3], keep_dims=True)
@@ -132,31 +123,8 @@ def majority_pool_with_mask(p,f):
 # if m == 1, then consider each window as an unique instances, and each window have their own pca encoder
 # if m != 1, then all windows fetch from the same feature map share one pca encoder
 def pca_pool(temp, m = 1):
-    [N, H, W, K, C] = temp.get_shape().as_list()
-    if m == 1:
-        temp = tf.transpose(temp, [0,1,2,4,3])
-        temp = tf.reshape(temp, [-1, K, 1])
-    else:
-        temp = tf.transpose(temp, [0,4,3,1,2])
-        temp = tf.reshape(temp, [-1, K, H*W])
-#     compute for svd
-    [s, u, v] = tf.svd(tf.matmul(temp, tf.transpose(temp, [0,2,1])), compute_uv=True)
-#     use mark to remove Eigenvector except for the first one, which is the main component
-    temp_mark = np.zeros([K,K])
-    temp_mark[:,0] = 1
-    mark = tf.constant(temp_mark, dtype=tf.float32)
-    
-#     after reduce_sum actually it has been transposed automatically
-    u = tf.reduce_sum(tf.multiply(u, mark), axis=2)
-    u = tf.reshape(u, [-1, 1, K])
-    
-    # divide sqrt(k) to remove the effect of size of window
-    temp = tf.matmul(u, temp)/np.sqrt(K)
-    if m == 1: temp = tf.reshape(temp, [-1, H, W, C])
-    else: 
-        temp = tf.reshape(temp, [-1, C, H, W])
-        temp = tf.transpose(temp, [0, 2, 3, 1])
-    return temp
+    pool, mask = pca_pool_with_mask(temp, m)
+    return pool
 
 def pca_pool_with_mask(temp, m = 1):
     [N, H, W, K, C] = temp.get_shape().as_list()
@@ -192,11 +160,7 @@ def pca_pool_with_mask(temp, m = 1):
 # weithed pooling functions
 # weight before maxpool p:= patches, w:= weights
 def weight_pool(p, f, reduce_fun, pool_fun):
-    temp = tf.multiply(p, compute_weight(f, reduce_fun))
-    if pool_fun is majority_pool:
-        temp = pool_fun(temp, majority_frequency(temp))
-    else: temp = pool_fun(temp)
-    return temp
+    temp, u = weight_pool_with_mask(p, f, reduce_fun, pool_fun)
 
 
 def weight_pool_with_mask(p, f, reduce_fun, pool_fun):
@@ -208,35 +172,23 @@ def weight_pool_with_mask(p, f, reduce_fun, pool_fun):
     u = tf.multiply(u, w)
     return temp, u
 
+# weight is used to help to decide, but pool the original number
+def weight_pool_original_with_mask(p, f, return_fun, pool_fun):
+    pool, mask = weight_pool_with_mask(p, f, return_fun, pool_fun)
+    mask = tf.cast(tf.greater(mask, 0), dtype=tf.float32)
+    mask = tf.div(mask, tf.reduce_sum(mask, axis=3, keep_dims=True))
+    return tf.multiply(p, mask)
+
+def weight_pool_original(p, f, return_fun, pool_fun):
+    pool, mask = weight_pool_original(p, f, return_fun, pool_fun)
+    return pool
+
 # maxpool before weight
 def pool_weight(p, f, reduce_fun, pool_fun):
-#     for now both p and w are in the shape of N,H,W,K,C
-    [N, H, W, K, C] = p.get_shape().as_list()
-    w = compute_weight(f, reduce_fun)
-    if pool_fun is majority_pool:
-        p = pool_fun(p, f)
-        w = tf.reduce_max(w, axis=3)
-    else:
-#     argmax in the shape of N, H, W, C
-        argmax = tf.argmax(p, axis=3)
-        p = pool_fun(p)
-#     move C before H
-        argmax = tf.transpose(argmax, [0, 3, 1, 2])
-        w = tf.transpose(w, [0, 4, 1, 2, 3])
-#     flatten argmax and w
-        argmax = tf.reshape(argmax, [N*H*W*C, 1])
-        w = tf.reshape(w, [N*H*W*C, K])
-#     create index helper
-        index = tf.constant(np.array([range(argmax.get_shape().as_list()[0])]), dtype=tf.int64)
-        argmax = tf.concat((tf.transpose(index), argmax), axis=1)
-#     get the corresponding weight of the max
-        w = tf.gather_nd(w, argmax)
-        w = tf.reshape(w, [N, C, H, W])
-        w = tf.transpose(w, [0, 2, 3, 1])
-    
-    return tf.multiply(p, w)
+    pool, mask = pool_weight_with_mask(p, f, reduce_fun, pool_fun)
+    return pool
 
-def pool_weight_with_mask():
+def pool_weight_with_mask(p, f, reduce_fun, pool_fun):
     #     for now both p and w are in the shape of N,H,W,K,C
     [N, H, W, K, C] = p.get_shape().as_list()
     w = compute_weight(f, reduce_fun)
