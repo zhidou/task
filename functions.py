@@ -122,8 +122,8 @@ def majority_pool_with_mask(p,f):
 # pcaPool
 # if m == 1, then consider each window as an unique instances, and each window have their own pca encoder
 # if m != 1, then all windows fetch from the same feature map share one pca encoder
-def pca_pool(temp, m = 1):
-    pool, mask = pca_pool_with_mask(temp, m)
+def pca_pool(p, m = 1):
+    pool, mask = pca_pool_with_mask(p, m)
     return pool
 
 def pca_pool_with_mask(temp, m = 1):
@@ -173,14 +173,14 @@ def weight_pool_with_mask(p, f, reduce_fun, pool_fun):
     return temp, u
 
 # weight is used to help to decide, but pool the original number
-def weight_pool_original_with_mask(p, f, return_fun, pool_fun):
-    pool, mask = weight_pool_with_mask(p, f, return_fun, pool_fun)
+def weight_pool_original_with_mask(p, f, reduce_fun, pool_fun):
+    pool, mask = weight_pool_with_mask(p, f, reduce_fun, pool_fun)
     mask = tf.cast(tf.greater(mask, 0), dtype=tf.float32)
     mask = tf.div(mask, tf.reduce_sum(mask, axis=3, keep_dims=True))
     return tf.multiply(p, mask)
 
-def weight_pool_original(p, f, return_fun, pool_fun):
-    pool, mask = weight_pool_original(p, f, return_fun, pool_fun)
+def weight_pool_original(p, f, reduce_fun, pool_fun):
+    pool, mask = weight_pool_original(p, f, reduce_fun, pool_fun)
     return pool
 
 # maxpool before weight
