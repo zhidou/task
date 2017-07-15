@@ -104,14 +104,19 @@ def majority_pool(p, f):
 def majority_pool_with_mask(p,f):
     btemp = tf.reduce_max(f , axis=[3], keep_dims=True)
 #     get the index of the majority element
-    pool = tf.cast(tf.equal(f, btemp), dtype=tf.float32)
+    mask = tf.cast(tf.equal(f, btemp), dtype=tf.float32)
 #     use the largest frequency to represent each window
     btemp = tf.squeeze(btemp, squeeze_dims=3)
 #     compute mean of the elements that have same round value in each window
-    pool = tf.div(tf.reduce_sum(tf.multiply(p, pool), axis=[3]), btemp)
+    pool = tf.div(tf.reduce_sum(tf.multiply(p, mask), axis=[3]), btemp)
+    mask = tf.reduce_max(tf.multiply(p, mask), axis=3)
+
+    mp, mm = max_pool_with_mask(cast(p))
+    mp = tf.reduce_sum(tf.multiply(p, mm), axis=3)
+
 #     when the largest frequency is 1, then we just the max value in p as the result, else use the mean of the of elements
 #     having the same round value, as the result.
-    pool = tf.where(tf.equal(btemp, 1), tf.reduce_max(p, axis=[3]), pool)
+    pool = tf.where(tf.equal(mask, tf.reduce_max(p, axis=3)), mp, pool)
 
     [N, H, W, K, C] = p.get_shape().as_list()
     mask = tf.reshape(pool, [N, H, W, 1, C])
