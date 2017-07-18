@@ -12,3 +12,5 @@ echo "run Minist_Wmo"
 python Minist_Wmo.py
 echo "run Minist_Wmx"
 python Minist_Wmx.py
+echo "run Minist_Org"
+python Minist_Org.py
